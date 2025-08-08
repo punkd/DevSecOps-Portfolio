@@ -26,7 +26,7 @@ pipeline {
     stage('�� Lint Code (flake8)') {
       steps {
         sh '''
-          source venv/bin/activate
+          . venv/bin/activate
           flake8 app.py || true
         '''
       }
@@ -35,7 +35,7 @@ pipeline {
     stage('🔐 Security Scan (Bandit)') {
       steps {
         sh '''
-          source venv/bin/activate
+          . venv/bin/activate
           bandit -r . -f json -o bandit-report.json || true
         '''
       }
