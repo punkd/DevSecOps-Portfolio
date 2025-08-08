@@ -48,6 +48,7 @@ pipeline {
 
     stage('🐳 Docker Build') {
       steps {
+        ls -la
         sh '''
           docker build -t $IMAGE_NAME .
         '''
