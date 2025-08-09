@@ -1,0 +1,112 @@
+pipeline {
+  agent any
+  environment {
+    AWS_DEFAULT_REGION = 'us-east-1'
+  }
+  options { timestamps(); ansiColor('xterm') }
+
+  stages {
+    stage('🔎 Diagnostics') {
+      steps {
+        sh '''
+          echo "=== Versions ==="
+          terraform -version || true
+          aws --version || true
+        '''
+        withCredentials([usernamePassword(
+          credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
+          usernameVariable: 'AWS_ACCESS_KEY_ID',
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
+          sh 'aws sts get-caller-identity'
+        }
+      }
+    }
+
+    stage('🧰 Terraform Init/Plan') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
+          usernameVariable: 'AWS_ACCESS_KEY_ID',
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
+          dir('pipiline+deployment_aws/infra') {
+            sh '''
+              terraform init -input=false
+              terraform fmt -check || true
+              terraform plan -out=tfplan -input=false
+            '''
+          }
+        }
+      }
+    }
+
+    stage('🚀 Terraform Apply') {
+      steps {
+        input message: 'Apply infrastructure changes?'
+        withCredentials([usernamePassword(
+          credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
+          usernameVariable: 'AWS_ACCESS_KEY_ID',
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
+          dir('pipiline+deployment_aws/infra') {
+            sh 'terraform apply -input=false -auto-approve tfplan'
+          }
+        }
+      }
+    }
+
+    stage('🩺 Smoke Test (ECS task public IP)') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
+          usernameVariable: 'AWS_ACCESS_KEY_ID',
+          passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+        )]) {
+          dir('pipiline+deployment_aws/infra') {
+            sh '''
+              set -e
+              CLUSTER=$(terraform output -raw cluster_name)
+              SERVICE=$(terraform output -raw service_name)
+              # wait for task to start
+              for i in 1 2 3 4 5; do
+                TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" --query 'taskArns[0]' --output text)
+                [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ] && break || sleep 10
+              done
+              ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+                   --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
+              IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" \
+                   --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
+              echo "Public IP: $IP"
+              for i in 1 2 3 4 5; do
+                curl -sf "http://$IP:5000/" && break || sleep 5
+              done | tee smoke.txt
+            '''
+          }
+        }
+      }
+      post {
+        always { archiveArtifacts artifacts: 'pipiline+deployment_aws/infra/smoke.txt', allowEmptyArchive: true }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "[CLEANUP] Build succeeded; destroying test environment…"
+      withCredentials([usernamePassword(
+        credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
+        usernameVariable: 'AWS_ACCESS_KEY_ID',
+        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+      )]) {
+        dir('pipiline+deployment_aws/infra') {
+          sh '''
+            terraform init -input=false
+            terraform destroy -auto-approve -input=false
+          '''
+        }
+      }
+    }
+    failure { echo "[CLEANUP] Build failed; keeping env for debugging." }
+  }
+}
