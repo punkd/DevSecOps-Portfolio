@@ -3,7 +3,7 @@ pipeline {
   environment {
     AWS_DEFAULT_REGION = 'us-east-1'
   }
-  options { timestamps(); ansiColor('xterm') }
+  options { timestamps() }
 
   stages {
     stage('🔎 Diagnostics') {
@@ -23,7 +23,7 @@ pipeline {
       }
     }
 
-    stage('🧰 Terraform Init/Plan') {
+    stage('🧰 Terraform Init/Plan (with import)') {
       steps {
         withCredentials([usernamePassword(
           credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
@@ -32,8 +32,18 @@ pipeline {
         )]) {
           dir('pipiline+deployment_aws/infra') {
             sh '''
+              set -e
+              echo "[INFO] Initializing Terraform..."
               terraform init -input=false
+
+              # Import ECR repo if not already managed
+              if ! terraform state show aws_ecr_repository.repo >/dev/null 2>&1; then
+                echo "[INFO] Importing existing ECR repo into Terraform state..."
+                terraform import aws_ecr_repository.repo flask-secure-app
+              fi
+
               terraform fmt -check || true
+              terraform validate
               terraform plan -out=tfplan -input=false
             '''
           }
@@ -75,38 +85,4 @@ pipeline {
               done
               ENI=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
                    --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
-              IP=$(aws ec2 describe-network-interfaces --network-interface-ids "$ENI" \
-                   --query 'NetworkInterfaces[0].Association.PublicIp' --output text)
-              echo "Public IP: $IP"
-              for i in 1 2 3 4 5; do
-                curl -sf "http://$IP:5000/" && break || sleep 5
-              done | tee smoke.txt
-            '''
-          }
-        }
-      }
-      post {
-        always { archiveArtifacts artifacts: 'pipiline+deployment_aws/infra/smoke.txt', allowEmptyArchive: true }
-      }
-    }
-  }
-
-  post {
-    success {
-      echo "[CLEANUP] Build succeeded; destroying test environment…"
-      withCredentials([usernamePassword(
-        credentialsId: '3f776ff3-06c6-49bf-b7c8-2277e9d5b1f6',
-        usernameVariable: 'AWS_ACCESS_KEY_ID',
-        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-      )]) {
-        dir('pipiline+deployment_aws/infra') {
-          sh '''
-            terraform init -input=false
-            terraform destroy -auto-approve -input=false
-          '''
-        }
-      }
-    }
-    failure { echo "[CLEANUP] Build failed; keeping env for debugging." }
-  }
-}
+              IP=$(aws ec2 describe-network-interface
