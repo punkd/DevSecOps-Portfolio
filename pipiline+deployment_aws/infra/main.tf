@@ -11,13 +11,6 @@ resource "aws_cloudwatch_log_group" "app" {
   retention_in_days = 7
 }
 
-resource "aws_ecr_repository" "repo" {
-  name = var.project_name
-  image_scanning_configuration { scan_on_push = true }
-  force_delete = true
-  # optional safety:
-  # lifecycle { prevent_destroy = true }
-}
 
 resource "aws_ecs_cluster" "this" {
   name = "${var.project_name}-cluster"
