@@ -54,7 +54,11 @@ pipeline {
             echo "[INFO] ECR: $REPO_URL"
             aws ecr get-login-password | docker login --username AWS --password-stdin $(echo $REPO_URL | cut -d'/' -f1)
             # tag with latest AND a short, traceable tag
-            TAG=$(date +%Y%m%d%H%M%S)-${GIT_COMMIT:0:7}
+            
+            SHORT_SHA=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "nosha")
+            TAG="$(date +%Y%m%d%H%M%S)-${SHORT_SHA}"
+            echo "TAG=$TAG"
+
             docker tag ${IMAGE_NAME}:latest $REPO_URL:latest
             docker tag ${IMAGE_NAME}:latest $REPO_URL:$TAG
             docker push $REPO_URL:latest
