@@ -5,7 +5,16 @@ pipeline {
     IMAGE_NAME = 'flask-secure-app'
   }
 
+
   stages {
+    stage('⚙️ Load Configuration') {
+      steps {
+        script {
+          def props = readProperties file: 'pipeline.vars'
+          env.IMAGE_NAME = props.IMAGE_NAME
+        }
+      }
+    }
     stage('📥 Checkout Code') {
       steps {
         checkout scm
